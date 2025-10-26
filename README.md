@@ -2,4 +2,5 @@
 ## _This is a one-time throw away project, don't expect much_
 
 ![icon](https://github.com/topman365pro/Mac-Photo-Booth-Composer/blob/main/image.png?raw=true | width=100)
+<img src="[https://github.com/favicon.ico"](https://github.com/topman365pro/Mac-Photo-Booth-Composer/blob/main/image.png?raw=true) width="250">
 ![Screenshoot](https://github.com/topman365pro/Mac-Photo-Booth-Composer/blob/main/ss.png?raw=true)
