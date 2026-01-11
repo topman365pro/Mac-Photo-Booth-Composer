@@ -15,6 +15,11 @@ import PDFKit
 
 // MARK: - ContentView
 
+struct SlotTransform: Equatable {
+    var zoom: CGFloat = 1.0
+    var offset: CGSize = .zero
+}
+
 struct ContentView: View {
     // Camera permission state
     @State private var cameraAccessGranted: Bool? = nil
@@ -27,6 +32,7 @@ struct ContentView: View {
     @State private var torchLevel: Float = 0.6
     @State private var captured: [NSImage?] = Array(repeating: nil, count: 3)
     @State private var activeSlot: Int = 0
+    @State private var slotTransforms: [SlotTransform] = Array(repeating: SlotTransform(), count: 3)
 
     // Collage settings
     @State private var spacing: CGFloat = 30
@@ -312,30 +318,14 @@ struct ContentView: View {
     }
 
     private func filmSlot(index: Int) -> some View {
-        Button {
+        FilmSlotEditor(
+            index: index,
+            image: captured[index],
+            transform: $slotTransforms[index],
+            isActive: activeSlot == index
+        ) {
             activeSlot = index
-        } label: {
-            ZStack {
-                if let img = captured[index] {
-                    Image(nsImage: img)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(height: 90)
-                        .clipped()
-                } else {
-                    HStack(spacing: 6) {
-                        Image(systemName: "camera")
-                        Text("Slot \(index + 1)")
-                    }
-                    .frame(height: 90)
-                    .frame(maxWidth: .infinity)
-                    .background(Color.secondary.opacity(0.12))
-                }
-                if activeSlot == index { RoundedRectangle(cornerRadius: 6).stroke(Color.accentColor, lineWidth: 3) }
-                else { RoundedRectangle(cornerRadius: 6).stroke(.quaternary, lineWidth: 1) }
-            }
         }
-        .buttonStyle(.plain)
     }
 
     private var isReadyToExport: Bool { captured.allSatisfy { $0 != nil } }
@@ -345,6 +335,7 @@ struct ContentView: View {
             if let image {
                 // Save into current slot
                 captured[activeSlot] = image
+                slotTransforms[activeSlot] = SlotTransform()
                 
                 // Advance selection: prefer the next empty slot, otherwise wrap to next index
                 let total = captured.count
@@ -359,7 +350,10 @@ struct ContentView: View {
         }
     }
 
-    private func clearActiveSlot() { captured[activeSlot] = nil }
+    private func clearActiveSlot() {
+        captured[activeSlot] = nil
+        slotTransforms[activeSlot] = SlotTransform()
+    }
 
     private func pickBackground() {
         let panel = NSOpenPanel()
@@ -377,6 +371,7 @@ struct ContentView: View {
         let imgs = captured.compactMap { $0 }
         return CollageRenderer.makeVerticalCollage(
             photos: imgs,
+            slotTransforms: slotTransforms,
             canvasSize: size,
             spacing: spacing,
             insetTop: inset,
@@ -443,6 +438,82 @@ struct ContentView: View {
             } catch {
                 exportMessage = "Failed to save: \(error.localizedDescription)"
             }
+        }
+    }
+}
+
+// MARK: - Film Slot Editor
+
+struct FilmSlotEditor: View {
+    let index: Int
+    let image: NSImage?
+    @Binding var transform: SlotTransform
+    let isActive: Bool
+    let onSelect: () -> Void
+
+    @GestureState private var dragTranslation: CGSize = .zero
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button(action: onSelect) {
+                ZStack {
+                    if let img = image {
+                        GeometryReader { geo in
+                            let size = geo.size
+                            let translation = CGSize(
+                                width: dragTranslation.width / max(size.width, 1),
+                                height: dragTranslation.height / max(size.height, 1)
+                            )
+                            let effectiveOffset = CGSize(
+                                width: transform.offset.width + translation.width,
+                                height: transform.offset.height + translation.height
+                            )
+                            Image(nsImage: img)
+                                .resizable()
+                                .scaledToFill()
+                                .scaleEffect(transform.zoom)
+                                .offset(
+                                    x: size.width * effectiveOffset.width,
+                                    y: size.height * effectiveOffset.height
+                                )
+                                .frame(width: size.width, height: size.height)
+                                .clipped()
+                                .contentShape(Rectangle())
+                                .gesture(
+                                    DragGesture()
+                                        .updating($dragTranslation) { value, state, _ in
+                                            state = value.translation
+                                        }
+                                        .onEnded { value in
+                                            guard size.width > 0, size.height > 0 else { return }
+                                            transform.offset.width += value.translation.width / size.width
+                                            transform.offset.height += value.translation.height / size.height
+                                        }
+                                )
+                        }
+                        .frame(height: 90)
+                    } else {
+                        HStack(spacing: 6) {
+                            Image(systemName: "camera")
+                            Text("Slot \(index + 1)")
+                        }
+                        .frame(height: 90)
+                        .frame(maxWidth: .infinity)
+                        .background(Color.secondary.opacity(0.12))
+                    }
+                    if isActive { RoundedRectangle(cornerRadius: 6).stroke(Color.accentColor, lineWidth: 3) }
+                    else { RoundedRectangle(cornerRadius: 6).stroke(.quaternary, lineWidth: 1) }
+                }
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Zoom")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Slider(value: $transform.zoom, in: 1.0...3.0)
+            }
+            .disabled(image == nil)
         }
     }
 }
@@ -623,6 +694,7 @@ struct CameraPreviewView: NSViewRepresentable {
 enum CollageRenderer {
     static func makeVerticalCollage(
         photos: [NSImage],
+        slotTransforms: [SlotTransform],
         canvasSize: CGSize,
         spacing: CGFloat,
         insetTop: CGFloat,
@@ -638,6 +710,7 @@ enum CollageRenderer {
         // Ensure exactly 3 images by trimming or repeating last
         let imgs = Array(photos.prefix(3)) + Array(repeating: photos.last ?? photos.first!, count: max(0, 3 - photos.count))
         let drawImgs: [NSImage] = mirror ? imgs.map { $0.mirroredHorizontally() } : imgs
+        let transforms = Array(slotTransforms.prefix(3)) + Array(repeating: SlotTransform(), count: max(0, 3 - slotTransforms.count))
 
         let image = NSImage(size: canvasSize, flipped: false) { rect in
             guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
@@ -686,6 +759,7 @@ enum CollageRenderer {
 
             for (index, frame) in frames.enumerated() {
                 let img = drawImgs[index]
+                let transform = transforms[index]
 
                 // Path with corner radius
                 let path = CGPath(roundedRect: frame, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
@@ -695,10 +769,13 @@ enum CollageRenderer {
                 // Draw image scaled to fill
                 if cropToFourByThree {
                     let cropRect = cropRect(for: img.size, to: slotAspect)
-                    img.draw(in: frame, from: cropRect, operation: .sourceOver, fraction: 1)
+                    let baseRect = aspectFillRect(for: img.size, in: frame)
+                    let transformedRect = applyTransform(baseRect, in: frame, transform: transform)
+                    img.draw(in: transformedRect, from: cropRect, operation: .sourceOver, fraction: 1)
                 } else {
-                    let fitted = aspectFillRect(for: img.size, in: frame)
-                    img.draw(in: fitted)
+                    let baseRect = aspectFillRect(for: img.size, in: frame)
+                    let transformedRect = applyTransform(baseRect, in: frame, transform: transform)
+                    img.draw(in: transformedRect)
                 }
 
                 // Restore clip for next pass
@@ -715,6 +792,20 @@ enum CollageRenderer {
             return true
         }
         return image
+    }
+
+    private static func applyTransform(_ baseRect: CGRect, in frame: CGRect, transform: SlotTransform) -> CGRect {
+        let zoom = max(transform.zoom, 0.1)
+        let scaledWidth = baseRect.width * zoom
+        let scaledHeight = baseRect.height * zoom
+        let offsetX = frame.width * transform.offset.width
+        let offsetY = frame.height * transform.offset.height
+        return CGRect(
+            x: baseRect.midX - scaledWidth / 2 + offsetX,
+            y: baseRect.midY - scaledHeight / 2 + offsetY,
+            width: scaledWidth,
+            height: scaledHeight
+        )
     }
 
     private static let templateFrameRectsNormalized: [CGRect] = [
