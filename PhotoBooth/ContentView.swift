@@ -47,6 +47,9 @@ struct ContentView: View {
     // Bottom margin bias (extra margin at bottom of strip vs top)
     @State private var bottomMarginExtra: CGFloat = 240
 
+    // Background fit
+    @State private var backgroundFit: BackgroundFit = .fill
+
     // Export feedback
     @State private var isExporting: Bool = false
     @State private var exportMessage: String? = nil
@@ -186,6 +189,12 @@ struct ContentView: View {
                         Button("Clear") { backgroundImage = nil }
                     }
                 }
+                Picker("Background Fit", selection: $backgroundFit) {
+                    ForEach(BackgroundFit.allCases) { fit in
+                        Text(fit.title).tag(fit)
+                    }
+                }
+                .pickerStyle(.segmented)
                 if let bg = backgroundImage {
                     Image(nsImage: bg)
                         .resizable()
@@ -368,6 +377,7 @@ struct ContentView: View {
             cornerRadius: cornerRadius,
             borderWidth: drawBorder ? borderWidth : 0,
             background: backgroundImage,
+            backgroundFit: backgroundFit,
             mirror: mirrorPhotos,
             cropToFourByThree: cropToFourByThree,
             layoutMode: layoutMode
@@ -601,6 +611,7 @@ enum CollageRenderer {
         cornerRadius: CGFloat,
         borderWidth: CGFloat,
         background: NSImage?,
+        backgroundFit: BackgroundFit,
         mirror: Bool,
         cropToFourByThree: Bool,
         layoutMode: CollageLayoutMode
@@ -614,7 +625,18 @@ enum CollageRenderer {
 
             // Background fill (if provided)
             if let bg = background {
-                bg.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+                ctx.saveGState()
+                ctx.addRect(rect)
+                ctx.clip()
+                let backgroundRect: CGRect
+                switch backgroundFit {
+                case .fill:
+                    backgroundRect = aspectFillRect(for: bg.size, in: rect)
+                case .fit:
+                    backgroundRect = aspectFitRect(for: bg.size, in: rect)
+                }
+                bg.draw(in: backgroundRect, from: .zero, operation: .sourceOver, fraction: 1)
+                ctx.restoreGState()
                 // add a slight overlay for contrast
                 ctx.setFillColor(NSColor.black.withAlphaComponent(0.05).cgColor)
                 ctx.fill(rect)
@@ -706,6 +728,15 @@ enum CollageRenderer {
         return CGRect(x: x, y: y, width: w, height: h)
     }
 
+    private static func aspectFitRect(for imageSize: CGSize, in target: CGRect) -> CGRect {
+        let scale = min(target.width / imageSize.width, target.height / imageSize.height)
+        let w = imageSize.width * scale
+        let h = imageSize.height * scale
+        let x = target.midX - w / 2
+        let y = target.midY - h / 2
+        return CGRect(x: x, y: y, width: w, height: h)
+    }
+
     private static func cropRect(for imageSize: CGSize, to aspect: CGFloat) -> CGRect {
         let imageAspect = imageSize.width / imageSize.height
         if imageAspect > aspect {
@@ -732,6 +763,22 @@ enum CollageLayoutMode: String, CaseIterable, Identifiable {
             return "Simple strip"
         case .templateLayout:
             return "Template layout"
+        }
+    }
+}
+
+enum BackgroundFit: String, CaseIterable, Identifiable {
+    case fill
+    case fit
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .fill:
+            return "Fill"
+        case .fit:
+            return "Fit"
         }
     }
 }
