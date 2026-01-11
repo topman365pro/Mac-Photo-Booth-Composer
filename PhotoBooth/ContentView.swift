@@ -59,6 +59,7 @@ struct ContentView: View {
     // Export feedback
     @State private var isExporting: Bool = false
     @State private var exportMessage: String? = nil
+    @State private var shortSidePlacement: ShortSidePlacement = .top
 
     var body: some View {
         NavigationSplitView {
@@ -215,6 +216,12 @@ struct ContentView: View {
             GroupBox("Export") {
                 HStack { Text("Strip width on A4"); Spacer(); Text("\(Int(collageWidthFraction * 100))%") }
                 Slider(value: $collageWidthFraction, in: 0.1...1.0)
+                Picker("Short side placement", selection: $shortSidePlacement) {
+                    ForEach(ShortSidePlacement.allCases) { placement in
+                        Text(placement.title).tag(placement)
+                    }
+                }
+                .pickerStyle(.segmented)
                 Button(role: .none) { exportPDF() } label: {
                     Label("Export A4 PDF…", systemImage: "square.and.arrow.down")
                 }
@@ -387,12 +394,24 @@ struct ContentView: View {
 
         // A4 size in points (72 dpi): 595 x 842 portrait
         let a4 = CGSize(width: 595, height: 842)
-        let margin: CGFloat = 24
-        let targetWidth = (a4.width - 2 * margin) * collageWidthFraction
+        let shortSideMargin: CGFloat = 24
+        let targetWidth = (a4.width - 2 * shortSideMargin) * collageWidthFraction
         let scale = targetWidth / rotated.size.width
         let drawSize = CGSize(width: rotated.size.width * scale, height: rotated.size.height * scale)
-        let collageX = (a4.width - drawSize.width) / 2.0
-        let topY = a4.height - margin
+        // Anchor the rotated collage to the selected short edge with a fixed margin.
+        let collageOrigin: CGPoint
+        switch shortSidePlacement {
+        case .top:
+            collageOrigin = CGPoint(
+                x: (a4.width - drawSize.width) / 2.0,
+                y: a4.height - shortSideMargin - drawSize.height
+            )
+        case .left:
+            collageOrigin = CGPoint(
+                x: shortSideMargin,
+                y: (a4.height - drawSize.height) / 2.0
+            )
+        }
 
         let pdfData = PDFRenderer.createA4PDF { ctx in
             // Bind AppKit graphics context to this PDF context
@@ -401,7 +420,7 @@ struct ContentView: View {
             NSGraphicsContext.current = nsctx
 
             // 1) Compute collage rect (rotated image already computed)
-            let collageRect = CGRect(x: collageX, y: topY - drawSize.height, width: drawSize.width, height: drawSize.height)
+            let collageRect = CGRect(origin: collageOrigin, size: drawSize)
 
             // Draw the rotated collage image directly, no extra PDF background
             rotated.draw(in: collageRect)
@@ -501,6 +520,9 @@ struct FilmSlotEditor: View {
                     .buttonStyle(.borderless)
                     .disabled(image == nil)
                 }
+                Text("Zoom")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Slider(value: $transform.zoom, in: 1.0...3.0)
             }
             .disabled(image == nil)
@@ -879,6 +901,22 @@ enum BackgroundFit: String, CaseIterable, Identifiable {
             return "Fill"
         case .fit:
             return "Fit"
+        }
+    }
+}
+
+enum ShortSidePlacement: String, CaseIterable, Identifiable {
+    case top
+    case left
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .top:
+            return "Top"
+        case .left:
+            return "Left"
         }
     }
 }
