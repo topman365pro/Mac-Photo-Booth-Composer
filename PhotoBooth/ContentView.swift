@@ -35,6 +35,7 @@ struct ContentView: View {
     @State private var drawBorder: Bool = true
     @State private var borderWidth: CGFloat = 1
     @State private var mirrorPhotos: Bool = false
+    @State private var cropToFourByThree: Bool = true
     // Controls vertical length of the strip (height only; width unchanged)
     @State private var stripLengthFactor: CGFloat = 1.6
 
@@ -152,6 +153,10 @@ struct ContentView: View {
                         Slider(value: $borderWidth, in: 0.5...20)
                     }
                     Toggle("Mirror Photos", isOn: $mirrorPhotos)
+                    Toggle("Crop Photos to 4:3", isOn: $cropToFourByThree)
+                    Text("When enabled, images are cropped to a 4:3 frame before placement.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     HStack { Text("Bottom Margin Extra"); Spacer(); Text("\(Int(bottomMarginExtra))") }
                     Slider(value: $bottomMarginExtra, in: 0...240)
                     HStack { Text("Strip Length"); Spacer(); Text("\(Int(stripLengthFactor * 100))%") }
@@ -349,7 +354,8 @@ struct ContentView: View {
             cornerRadius: cornerRadius,
             borderWidth: drawBorder ? borderWidth : 0,
             background: backgroundImage,
-            mirror: mirrorPhotos
+            mirror: mirrorPhotos,
+            cropToFourByThree: cropToFourByThree
         )
     }
 
@@ -580,7 +586,8 @@ enum CollageRenderer {
         cornerRadius: CGFloat,
         borderWidth: CGFloat,
         background: NSImage?,
-        mirror: Bool
+        mirror: Bool,
+        cropToFourByThree: Bool
     ) -> NSImage {
         // Ensure exactly 4 images by trimming or repeating last
         let imgs = Array(photos.prefix(4)) + Array(repeating: photos.last ?? photos.first!, count: max(0, 4 - photos.count))
@@ -607,12 +614,18 @@ enum CollageRenderer {
             inner.size.height = rect.height - insetTop - insetBottom
 
             let totalSpacing = spacing * 3
-            let photoHeight = (inner.height - totalSpacing) / 4
-            let photoWidth = inner.width
+            let slotAspect: CGFloat = 4.0 / 3.0
+            let maxHeightByWidth = inner.width / slotAspect
+            let maxHeightByHeight = (inner.height - totalSpacing) / 4
+            let photoHeight = min(maxHeightByWidth, maxHeightByHeight)
+            let photoWidth = photoHeight * slotAspect
+            let extraVerticalSpace = inner.height - (photoHeight * 4 + totalSpacing)
+            let verticalOffset = max(0, extraVerticalSpace / 2)
+            let slotX = inner.midX - photoWidth / 2
 
             for i in 0..<4 {
-                let y = inner.minY + CGFloat(i) * (photoHeight + spacing)
-                let frame = CGRect(x: inner.minX, y: y, width: photoWidth, height: photoHeight)
+                let y = inner.minY + verticalOffset + CGFloat(i) * (photoHeight + spacing)
+                let frame = CGRect(x: slotX, y: y, width: photoWidth, height: photoHeight)
 
                 // Path with corner radius
                 let path = CGPath(roundedRect: frame, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
@@ -621,8 +634,13 @@ enum CollageRenderer {
 
                 // Draw image scaled to fill
                 let img = drawImgs[i]
-                let fitted = aspectFillRect(for: img.size, in: frame)
-                img.draw(in: fitted)
+                if cropToFourByThree {
+                    let cropRect = cropRect(for: img.size, to: slotAspect)
+                    img.draw(in: frame, from: cropRect, operation: .sourceOver, fraction: 1)
+                } else {
+                    let fitted = aspectFillRect(for: img.size, in: frame)
+                    img.draw(in: fitted)
+                }
 
                 // Restore clip for next pass
                 ctx.resetClip()
@@ -647,6 +665,19 @@ enum CollageRenderer {
         let x = target.midX - w / 2
         let y = target.midY - h / 2
         return CGRect(x: x, y: y, width: w, height: h)
+    }
+
+    private static func cropRect(for imageSize: CGSize, to aspect: CGFloat) -> CGRect {
+        let imageAspect = imageSize.width / imageSize.height
+        if imageAspect > aspect {
+            let newWidth = imageSize.height * aspect
+            let x = (imageSize.width - newWidth) / 2
+            return CGRect(x: x, y: 0, width: newWidth, height: imageSize.height)
+        } else {
+            let newHeight = imageSize.width / aspect
+            let y = (imageSize.height - newHeight) / 2
+            return CGRect(x: 0, y: y, width: imageSize.width, height: newHeight)
+        }
     }
 }
 
