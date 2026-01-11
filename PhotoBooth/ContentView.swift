@@ -246,7 +246,9 @@ struct ContentView: View {
                                 .padding(8)
                             }
                     }
-                    .frame(minWidth: 420, minHeight: 300)
+                    .aspectRatio(4.0/3.0, contentMode: .fit)
+                    .frame(minWidth: 420)
+                    .frame(minHeight: 315)
 
                     VStack(spacing: 10) {
                         Text("Filmstrip (3)").font(.headline)
@@ -605,11 +607,14 @@ struct CameraPreviewView: NSViewRepresentable {
         layer.videoGravity = .resizeAspectFill
         view.wantsLayer = true
         view.layer = layer
+        layer.frame = view.bounds
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView.layer as? AVCaptureVideoPreviewLayer)?.session = session
+        guard let layer = nsView.layer as? AVCaptureVideoPreviewLayer else { return }
+        layer.session = session
+        layer.frame = nsView.bounds
     }
 }
 
