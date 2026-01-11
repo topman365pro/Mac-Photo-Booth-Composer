@@ -25,7 +25,7 @@ struct ContentView: View {
     @State private var selectedCameraID: String? = nil
     @State private var torchEnabled: Bool = false
     @State private var torchLevel: Float = 0.6
-    @State private var captured: [NSImage?] = Array(repeating: nil, count: 4)
+    @State private var captured: [NSImage?] = Array(repeating: nil, count: 3)
     @State private var activeSlot: Int = 0
 
     // Collage settings
@@ -95,7 +95,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Photo Booth Builder")
                 .font(.title2).bold()
-            Text("1) Snap 4 photos → 2) Build collage → 3) Export A4 PDF")
+            Text("1) Snap 3 photos → 2) Build collage → 3) Export A4 PDF")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -239,8 +239,8 @@ struct ContentView: View {
                     .frame(minWidth: 420, minHeight: 300)
 
                     VStack(spacing: 10) {
-                        Text("Filmstrip (4)").font(.headline)
-                        ForEach(0..<4, id: \.self) { idx in
+                        Text("Filmstrip (3)").font(.headline)
+                        ForEach(0..<3, id: \.self) { idx in
                             filmSlot(index: idx)
                         }
                         Spacer()
@@ -271,7 +271,7 @@ struct ContentView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
                         } else {
-                            ContentUnavailableView("Need 4 photos", systemImage: "rectangle.on.rectangle.slash", description: Text("Snap all 4 slots to preview the collage. \n (Ignore the resulting previews, they're kinda broken)"))
+                            ContentUnavailableView("Need 3 photos", systemImage: "rectangle.on.rectangle.slash", description: Text("Snap all 3 slots to preview the collage. \n (Ignore the resulting previews, they're kinda broken)"))
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
                     }
@@ -589,8 +589,8 @@ enum CollageRenderer {
         mirror: Bool,
         cropToFourByThree: Bool
     ) -> NSImage {
-        // Ensure exactly 4 images by trimming or repeating last
-        let imgs = Array(photos.prefix(4)) + Array(repeating: photos.last ?? photos.first!, count: max(0, 4 - photos.count))
+        // Ensure exactly 3 images by trimming or repeating last
+        let imgs = Array(photos.prefix(3)) + Array(repeating: photos.last ?? photos.first!, count: max(0, 3 - photos.count))
         let drawImgs: [NSImage] = mirror ? imgs.map { $0.mirroredHorizontally() } : imgs
 
         let scale = NSScreen.main?.backingScaleFactor ?? 2.0
@@ -626,6 +626,13 @@ enum CollageRenderer {
             for i in 0..<4 {
                 let y = inner.minY + verticalOffset + CGFloat(i) * (photoHeight + spacing)
                 let frame = CGRect(x: slotX, y: y, width: photoWidth, height: photoHeight)
+            let totalSpacing = spacing * 2
+            let photoHeight = (inner.height - totalSpacing) / 3
+            let photoWidth = inner.width
+
+            for i in 0..<3 {
+                let y = inner.minY + CGFloat(i) * (photoHeight + spacing)
+                let frame = CGRect(x: inner.minX, y: y, width: photoWidth, height: photoHeight)
 
                 // Path with corner radius
                 let path = CGPath(roundedRect: frame, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
