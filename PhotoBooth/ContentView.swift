@@ -36,6 +36,7 @@ struct ContentView: View {
     @State private var borderWidth: CGFloat = 1
     @State private var mirrorPhotos: Bool = false
     @State private var cropToFourByThree: Bool = true
+    @State private var layoutMode: CollageLayoutMode = .simpleStrip
     // Controls vertical length of the strip (height only; width unchanged)
     @State private var stripLengthFactor: CGFloat = 1.6
 
@@ -141,10 +142,20 @@ struct ContentView: View {
 
             GroupBox("Collage Settings") {
                 VStack(alignment: .leading) {
-                    HStack { Text("Spacing"); Spacer(); Text("\(Int(spacing))") }
-                    Slider(value: $spacing, in: 0...120)
-                    HStack { Text("Outer Margin"); Spacer(); Text("\(Int(inset))") }
-                    Slider(value: $inset, in: 0...320)
+                    Picker("Layout", selection: $layoutMode) {
+                        ForEach(CollageLayoutMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.bottom, 4)
+                    Group {
+                        HStack { Text("Spacing"); Spacer(); Text("\(Int(spacing))") }
+                        Slider(value: $spacing, in: 0...120)
+                        HStack { Text("Outer Margin"); Spacer(); Text("\(Int(inset))") }
+                        Slider(value: $inset, in: 0...320)
+                    }
+                    .disabled(layoutMode == .templateLayout)
                     HStack { Text("Corner Radius"); Spacer(); Text("\(Int(cornerRadius))") }
                     Slider(value: $cornerRadius, in: 0...80)
                     Toggle("Border", isOn: $drawBorder)
@@ -157,8 +168,11 @@ struct ContentView: View {
                     Text("When enabled, images are cropped to a 4:3 frame before placement.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    HStack { Text("Bottom Margin Extra"); Spacer(); Text("\(Int(bottomMarginExtra))") }
-                    Slider(value: $bottomMarginExtra, in: 0...240)
+                    Group {
+                        HStack { Text("Bottom Margin Extra"); Spacer(); Text("\(Int(bottomMarginExtra))") }
+                        Slider(value: $bottomMarginExtra, in: 0...240)
+                    }
+                    .disabled(layoutMode == .templateLayout)
                     HStack { Text("Strip Length"); Spacer(); Text("\(Int(stripLengthFactor * 100))%") }
                     Slider(value: $stripLengthFactor, in: 0.6...2.5)
                 }
@@ -355,7 +369,8 @@ struct ContentView: View {
             borderWidth: drawBorder ? borderWidth : 0,
             background: backgroundImage,
             mirror: mirrorPhotos,
-            cropToFourByThree: cropToFourByThree
+            cropToFourByThree: cropToFourByThree,
+            layoutMode: layoutMode
         )
     }
 
@@ -587,13 +602,13 @@ enum CollageRenderer {
         borderWidth: CGFloat,
         background: NSImage?,
         mirror: Bool,
-        cropToFourByThree: Bool
+        cropToFourByThree: Bool,
+        layoutMode: CollageLayoutMode
     ) -> NSImage {
         // Ensure exactly 3 images by trimming or repeating last
         let imgs = Array(photos.prefix(3)) + Array(repeating: photos.last ?? photos.first!, count: max(0, 3 - photos.count))
         let drawImgs: [NSImage] = mirror ? imgs.map { $0.mirroredHorizontally() } : imgs
 
-        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
         let image = NSImage(size: canvasSize, flipped: false) { rect in
             guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
 
@@ -608,31 +623,28 @@ enum CollageRenderer {
                 ctx.fill(rect)
             }
 
-            // Asymmetric outer margins: top and bottom can differ
-            var inner = rect.insetBy(dx: insetTop, dy: 0)
-            inner.origin.y = rect.minY + insetBottom
-            inner.size.height = rect.height - insetTop - insetBottom
-
-            let totalSpacing = spacing * 3
             let slotAspect: CGFloat = 4.0 / 3.0
-            let maxHeightByWidth = inner.width / slotAspect
-            let maxHeightByHeight = (inner.height - totalSpacing) / 4
-            let photoHeight = min(maxHeightByWidth, maxHeightByHeight)
-            let photoWidth = photoHeight * slotAspect
-            let extraVerticalSpace = inner.height - (photoHeight * 4 + totalSpacing)
-            let verticalOffset = max(0, extraVerticalSpace / 2)
-            let slotX = inner.midX - photoWidth / 2
+            let frames: [CGRect]
+            switch layoutMode {
+            case .simpleStrip:
+                // Asymmetric outer margins: top and bottom can differ
+                var inner = rect.insetBy(dx: insetTop, dy: 0)
+                inner.origin.y = rect.minY + insetBottom
+                inner.size.height = rect.height - insetTop - insetBottom
 
-            for i in 0..<4 {
-                let y = inner.minY + verticalOffset + CGFloat(i) * (photoHeight + spacing)
-                let frame = CGRect(x: slotX, y: y, width: photoWidth, height: photoHeight)
-            let totalSpacing = spacing * 2
-            let photoHeight = (inner.height - totalSpacing) / 3
-            let photoWidth = inner.width
+                let totalSpacing = spacing * 2
+                let photoHeight = (inner.height - totalSpacing) / 3
+                let photoWidth = inner.width
+                frames = (0..<3).map { i in
+                    let y = inner.minY + CGFloat(i) * (photoHeight + spacing)
+                    return CGRect(x: inner.minX, y: y, width: photoWidth, height: photoHeight)
+                }
+            case .templateLayout:
+                frames = templateFrameRects(in: rect)
+            }
 
-            for i in 0..<3 {
-                let y = inner.minY + CGFloat(i) * (photoHeight + spacing)
-                let frame = CGRect(x: inner.minX, y: y, width: photoWidth, height: photoHeight)
+            for (index, frame) in frames.enumerated() {
+                let img = drawImgs[index]
 
                 // Path with corner radius
                 let path = CGPath(roundedRect: frame, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
@@ -640,7 +652,6 @@ enum CollageRenderer {
                 ctx.clip()
 
                 // Draw image scaled to fill
-                let img = drawImgs[i]
                 if cropToFourByThree {
                     let cropRect = cropRect(for: img.size, to: slotAspect)
                     img.draw(in: frame, from: cropRect, operation: .sourceOver, fraction: 1)
@@ -665,6 +676,27 @@ enum CollageRenderer {
         return image
     }
 
+    private static let templateFrameRectsNormalized: [CGRect] = [
+        CGRect(x: 0.153257, y: 0.047648, width: 0.691571, height: 0.199638),
+        CGRect(x: 0.153257, y: 0.257539, width: 0.691571, height: 0.199638),
+        CGRect(x: 0.153257, y: 0.467431, width: 0.691571, height: 0.199035)
+    ]
+
+    private static func templateFrameRects(in rect: CGRect) -> [CGRect] {
+        templateFrameRectsNormalized.map { normalized in
+            rectFromTopLeftNormalized(normalized, in: rect)
+        }
+    }
+
+    private static func rectFromTopLeftNormalized(_ normalized: CGRect, in rect: CGRect) -> CGRect {
+        let x = rect.minX + rect.width * normalized.minX
+        let width = rect.width * normalized.width
+        let height = rect.height * normalized.height
+        let yFromTop = rect.minY + rect.height * normalized.minY
+        let y = rect.maxY - yFromTop - height
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+
     private static func aspectFillRect(for imageSize: CGSize, in target: CGRect) -> CGRect {
         let scale = max(target.width / imageSize.width, target.height / imageSize.height)
         let w = imageSize.width * scale
@@ -684,6 +716,22 @@ enum CollageRenderer {
             let newHeight = imageSize.width / aspect
             let y = (imageSize.height - newHeight) / 2
             return CGRect(x: 0, y: y, width: imageSize.width, height: newHeight)
+        }
+    }
+}
+
+enum CollageLayoutMode: String, CaseIterable, Identifiable {
+    case simpleStrip
+    case templateLayout
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .simpleStrip:
+            return "Simple strip"
+        case .templateLayout:
+            return "Template layout"
         }
     }
 }
