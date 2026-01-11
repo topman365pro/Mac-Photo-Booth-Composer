@@ -25,7 +25,8 @@ struct ContentView: View {
     @State private var selectedCameraID: String? = nil
     @State private var torchEnabled: Bool = false
     @State private var torchLevel: Float = 0.6
-    @State private var captured: [NSImage?] = Array(repeating: nil, count: 4)
+    private let photoCount = 3
+    @State private var captured: [NSImage?] = Array(repeating: nil, count: 3)
     @State private var activeSlot: Int = 0
 
     // Collage settings
@@ -40,10 +41,16 @@ struct ContentView: View {
 
     // Background image
     @State private var backgroundImage: NSImage? = nil
+    @State private var layoutMode: CollageLayoutMode = .strip
     @State private var collageWidthFraction: CGFloat = 1.0 // fraction of A4 width after rotation placement
+    @State private var exportPlacement: ExportPlacement = .shortSideLeading
 
     // Bottom margin bias (extra margin at bottom of strip vs top)
     @State private var bottomMarginExtra: CGFloat = 240
+
+    // Per-photo adjustments
+    @State private var photoZooms: [CGFloat] = Array(repeating: 1.0, count: 3)
+    @State private var photoOffsets: [CGSize] = Array(repeating: .zero, count: 3)
 
     // Export feedback
     @State private var isExporting: Bool = false
@@ -94,7 +101,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Photo Booth Builder")
                 .font(.title2).bold()
-            Text("1) Snap 4 photos → 2) Build collage → 3) Export A4 PDF")
+            Text("1) Snap 3 photos → 2) Build collage → 3) Export A4 PDF")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -156,16 +163,30 @@ struct ContentView: View {
                     Slider(value: $bottomMarginExtra, in: 0...240)
                     HStack { Text("Strip Length"); Spacer(); Text("\(Int(stripLengthFactor * 100))%") }
                     Slider(value: $stripLengthFactor, in: 0.6...2.5)
+                    Text("Photos are cropped to 4:3 to match the template.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
                 .padding(.top, 4)
             }
 
             GroupBox("Background") {
-                HStack {
-                    Button("Choose Background…") { pickBackground() }
-                    if backgroundImage != nil {
-                        Button("Clear") { backgroundImage = nil }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Button("Choose Background…") { pickBackground() }
+                        if backgroundImage != nil {
+                            Button("Clear") {
+                                backgroundImage = nil
+                                layoutMode = .strip
+                            }
+                        }
                     }
+                    Picker("Layout", selection: $layoutMode) {
+                        Text("Simple Strip").tag(CollageLayoutMode.strip)
+                        Text("Green Template").tag(CollageLayoutMode.greenTemplate)
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(backgroundImage == nil)
                 }
                 if let bg = backgroundImage {
                     Image(nsImage: bg)
@@ -177,10 +198,37 @@ struct ContentView: View {
                 }
             }
 
+            GroupBox("Photo Adjustments") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Slot \(activeSlot + 1)")
+                        .font(.subheadline)
+                    HStack { Text("Zoom"); Spacer(); Text(String(format: "%.2f", photoZooms[activeSlot])) }
+                    Slider(value: Binding(
+                        get: { photoZooms[activeSlot] },
+                        set: { photoZooms[activeSlot] = $0 }
+                    ), in: 1.0...2.5)
+                    HStack { Text("Offset X"); Spacer(); Text(String(format: "%.2f", photoOffsets[activeSlot].width)) }
+                    Slider(value: Binding(
+                        get: { photoOffsets[activeSlot].width },
+                        set: { photoOffsets[activeSlot].width = $0 }
+                    ), in: -0.5...0.5)
+                    HStack { Text("Offset Y"); Spacer(); Text(String(format: "%.2f", photoOffsets[activeSlot].height)) }
+                    Slider(value: Binding(
+                        get: { photoOffsets[activeSlot].height },
+                        set: { photoOffsets[activeSlot].height = $0 }
+                    ), in: -0.5...0.5)
+                }
+            }
 
             GroupBox("Export") {
                 HStack { Text("Strip width on A4"); Spacer(); Text("\(Int(collageWidthFraction * 100))%") }
                 Slider(value: $collageWidthFraction, in: 0.1...1.0)
+                Picker("Placement", selection: $exportPlacement) {
+                    Text("Short Side (Left)").tag(ExportPlacement.shortSideLeading)
+                    Text("Centered").tag(ExportPlacement.centered)
+                    Text("Short Side (Right)").tag(ExportPlacement.shortSideTrailing)
+                }
+                .pickerStyle(.segmented)
                 Button(role: .none) { exportPDF() } label: {
                     Label("Export A4 PDF…", systemImage: "square.and.arrow.down")
                 }
@@ -234,8 +282,8 @@ struct ContentView: View {
                     .frame(minWidth: 420, minHeight: 300)
 
                     VStack(spacing: 10) {
-                        Text("Filmstrip (4)").font(.headline)
-                        ForEach(0..<4, id: \.self) { idx in
+                        Text("Filmstrip (\(photoCount))").font(.headline)
+                        ForEach(0..<photoCount, id: \.self) { idx in
                             filmSlot(index: idx)
                         }
                         Spacer()
@@ -266,7 +314,7 @@ struct ContentView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
                         } else {
-                            ContentUnavailableView("Need 4 photos", systemImage: "rectangle.on.rectangle.slash", description: Text("Snap all 4 slots to preview the collage. \n (Ignore the resulting previews, they're kinda broken)"))
+                            ContentUnavailableView("Need \(photoCount) photos", systemImage: "rectangle.on.rectangle.slash", description: Text("Snap all \(photoCount) slots to preview the collage."))
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
                     }
@@ -308,8 +356,9 @@ struct ContentView: View {
     private func captureToActiveSlot() {
         camera.capturePhoto { image in
             if let image {
+                let cropped = image.croppedToAspectRatio(4.0 / 3.0)
                 // Save into current slot
-                captured[activeSlot] = image
+                captured[activeSlot] = cropped
                 
                 // Advance selection: prefer the next empty slot, otherwise wrap to next index
                 let total = captured.count
@@ -334,27 +383,55 @@ struct ContentView: View {
         panel.canChooseFiles = true
         if panel.runModal() == .OK, let url = panel.url, let img = NSImage(contentsOf: url) {
             backgroundImage = img
+            layoutMode = .greenTemplate
         }
     }
 
     private func buildCollagePreview(size: CGSize) -> NSImage? {
         guard captured.allSatisfy({ $0 != nil }) else { return nil }
         let imgs = captured.compactMap { $0 }
-        return CollageRenderer.makeVerticalCollage(
+        let layout = resolveLayout(for: size)
+        return CollageRenderer.renderCollage(
             photos: imgs,
-            canvasSize: size,
-            spacing: spacing,
-            insetTop: inset,
-            insetBottom: inset + bottomMarginExtra,
+            layout: layout,
             cornerRadius: cornerRadius,
             borderWidth: drawBorder ? borderWidth : 0,
             background: backgroundImage,
-            mirror: mirrorPhotos
+            mirror: mirrorPhotos,
+            zooms: photoZooms,
+            offsets: photoOffsets
         )
     }
 
+    private func resolveLayout(for previewSize: CGSize) -> CollageLayout {
+        if layoutMode == .greenTemplate, let bg = backgroundImage,
+           let fittedSize = fittedCanvasSize(for: bg.size, in: previewSize),
+           let layout = CollageRenderer.layoutFromGreenTemplate(background: bg, expectedCount: photoCount, canvasSize: fittedSize) {
+            return layout
+        }
+        return CollageRenderer.stripLayout(
+            canvasSize: previewSize,
+            photoCount: photoCount,
+            spacing: spacing,
+            insetTop: inset,
+            insetBottom: inset + bottomMarginExtra
+        )
+    }
+
+    private func fittedCanvasSize(for original: CGSize, in available: CGSize) -> CGSize? {
+        guard original.width > 0, original.height > 0 else { return nil }
+        let scale = min(available.width / original.width, available.height / original.height)
+        return CGSize(width: original.width * scale, height: original.height * scale)
+    }
+
     private func exportPDF() {
-        guard let collageVertical = buildCollagePreview(size: CGSize(width: 1000, height: 2000 * stripLengthFactor)) else { return }
+        let renderSize: CGSize
+        if layoutMode == .greenTemplate, let bg = backgroundImage {
+            renderSize = bg.size
+        } else {
+            renderSize = CGSize(width: 1000, height: 2000 * stripLengthFactor)
+        }
+        guard let collageVertical = buildCollagePreview(size: renderSize) else { return }
 
         // Rotate collage 90° for landscape placement on PDF
         let rotated = collageVertical.rotated90(clockwise: true)
@@ -365,7 +442,7 @@ struct ContentView: View {
         let targetWidth = (a4.width - 2 * margin) * collageWidthFraction
         let scale = targetWidth / rotated.size.width
         let drawSize = CGSize(width: rotated.size.width * scale, height: rotated.size.height * scale)
-        let collageX = (a4.width - drawSize.width) / 2.0
+        let collageX = exportPlacement.xPosition(for: a4.width, drawWidth: drawSize.width, margin: margin)
         let topY = a4.height - margin
 
         let pdfData = PDFRenderer.createA4PDF { ctx in
@@ -568,63 +645,78 @@ struct CameraPreviewView: NSViewRepresentable {
     }
 }
 
+// MARK: - Collage Layout
+
+enum CollageLayoutMode: String, CaseIterable, Identifiable {
+    case strip
+    case greenTemplate
+
+    var id: String { rawValue }
+}
+
+enum ExportPlacement: String, CaseIterable, Identifiable {
+    case shortSideLeading
+    case centered
+    case shortSideTrailing
+
+    var id: String { rawValue }
+
+    func xPosition(for pageWidth: CGFloat, drawWidth: CGFloat, margin: CGFloat) -> CGFloat {
+        switch self {
+        case .shortSideLeading:
+            return margin
+        case .centered:
+            return (pageWidth - drawWidth) / 2.0
+        case .shortSideTrailing:
+            return pageWidth - margin - drawWidth
+        }
+    }
+}
+
+struct CollageLayout {
+    let canvasSize: CGSize
+    let frames: [CGRect]
+}
+
 // MARK: - Collage Renderer
 
 enum CollageRenderer {
-    static func makeVerticalCollage(
+    static func renderCollage(
         photos: [NSImage],
-        canvasSize: CGSize,
-        spacing: CGFloat,
-        insetTop: CGFloat,
-        insetBottom: CGFloat,
+        layout: CollageLayout,
         cornerRadius: CGFloat,
         borderWidth: CGFloat,
         background: NSImage?,
-        mirror: Bool
+        mirror: Bool,
+        zooms: [CGFloat],
+        offsets: [CGSize]
     ) -> NSImage {
-        // Ensure exactly 4 images by trimming or repeating last
-        let imgs = Array(photos.prefix(4)) + Array(repeating: photos.last ?? photos.first!, count: max(0, 4 - photos.count))
+        let count = layout.frames.count
+        let imgs = Array(photos.prefix(count)) + Array(repeating: photos.last ?? photos.first!, count: max(0, count - photos.count))
         let drawImgs: [NSImage] = mirror ? imgs.map { $0.mirroredHorizontally() } : imgs
 
-        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
-        let image = NSImage(size: canvasSize, flipped: false) { rect in
+        let image = NSImage(size: layout.canvasSize, flipped: false) { rect in
             guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
 
-            // Background fill (if provided)
             if let bg = background {
                 bg.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
-                // add a slight overlay for contrast
-                ctx.setFillColor(NSColor.black.withAlphaComponent(0.05).cgColor)
-                ctx.fill(rect)
             } else {
                 NSColor.windowBackgroundColor.setFill()
                 ctx.fill(rect)
             }
 
-            // Asymmetric outer margins: top and bottom can differ
-            var inner = rect.insetBy(dx: insetTop, dy: 0)
-            inner.origin.y = rect.minY + insetBottom
-            inner.size.height = rect.height - insetTop - insetBottom
-
-            let totalSpacing = spacing * 3
-            let photoHeight = (inner.height - totalSpacing) / 4
-            let photoWidth = inner.width
-
-            for i in 0..<4 {
-                let y = inner.minY + CGFloat(i) * (photoHeight + spacing)
-                let frame = CGRect(x: inner.minX, y: y, width: photoWidth, height: photoHeight)
-
-                // Path with corner radius
+            for i in 0..<count {
+                let frame = layout.frames[i]
                 let path = CGPath(roundedRect: frame, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
                 ctx.addPath(path)
                 ctx.clip()
 
-                // Draw image scaled to fill
                 let img = drawImgs[i]
-                let fitted = aspectFillRect(for: img.size, in: frame)
+                let zoom = zooms.indices.contains(i) ? zooms[i] : 1.0
+                let offset = offsets.indices.contains(i) ? offsets[i] : .zero
+                let fitted = adjustedFillRect(for: img.size, in: frame, zoom: zoom, offset: offset)
                 img.draw(in: fitted)
 
-                // Restore clip for next pass
                 ctx.resetClip()
 
                 if borderWidth > 0 {
@@ -640,6 +732,69 @@ enum CollageRenderer {
         return image
     }
 
+    static func stripLayout(
+        canvasSize: CGSize,
+        photoCount: Int,
+        spacing: CGFloat,
+        insetTop: CGFloat,
+        insetBottom: CGFloat
+    ) -> CollageLayout {
+        let rect = CGRect(origin: .zero, size: canvasSize)
+        let innerWidth = max(0, rect.width - insetTop * 2)
+        let availableHeight = max(0, rect.height - insetTop - insetBottom - spacing * CGFloat(max(0, photoCount - 1)))
+        let frameHeightFromWidth = innerWidth * 3.0 / 4.0
+        let frameHeight = min(frameHeightFromWidth, availableHeight / CGFloat(photoCount))
+        let frameWidth = frameHeight * 4.0 / 3.0
+        let startX = rect.midX - frameWidth / 2
+        let startY = rect.minY + insetBottom
+
+        let frames = (0..<photoCount).map { idx in
+            let y = startY + CGFloat(idx) * (frameHeight + spacing)
+            return CGRect(x: startX, y: y, width: frameWidth, height: frameHeight)
+        }
+        return CollageLayout(canvasSize: canvasSize, frames: frames)
+    }
+
+    static func layoutFromGreenTemplate(background: NSImage, expectedCount: Int, canvasSize: CGSize) -> CollageLayout? {
+        guard let cgImage = background.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let size = CGSize(width: cgImage.width, height: cgImage.height)
+        let frames = GreenTemplateDetector.detectFrames(in: cgImage)
+        guard frames.count >= expectedCount else { return nil }
+        let sorted = frames.sorted(by: { $0.minY < $1.minY })
+        let scaleX = canvasSize.width / size.width
+        let scaleY = canvasSize.height / size.height
+        let scaledFrames = sorted.prefix(expectedCount).map { frame in
+            CGRect(
+                x: frame.origin.x * scaleX,
+                y: frame.origin.y * scaleY,
+                width: frame.size.width * scaleX,
+                height: frame.size.height * scaleY
+            )
+        }
+        return CollageLayout(canvasSize: canvasSize, frames: scaledFrames)
+    }
+
+    private static func adjustedFillRect(
+        for imageSize: CGSize,
+        in target: CGRect,
+        zoom: CGFloat,
+        offset: CGSize
+    ) -> CGRect {
+        let fitted = aspectFillRect(for: imageSize, in: target)
+        let center = CGPoint(
+            x: target.midX + offset.width * target.width,
+            y: target.midY + offset.height * target.height
+        )
+        let scaledWidth = fitted.width * zoom
+        let scaledHeight = fitted.height * zoom
+        return CGRect(
+            x: center.x - scaledWidth / 2,
+            y: center.y - scaledHeight / 2,
+            width: scaledWidth,
+            height: scaledHeight
+        )
+    }
+
     private static func aspectFillRect(for imageSize: CGSize, in target: CGRect) -> CGRect {
         let scale = max(target.width / imageSize.width, target.height / imageSize.height)
         let w = imageSize.width * scale
@@ -647,6 +802,108 @@ enum CollageRenderer {
         let x = target.midX - w / 2
         let y = target.midY - h / 2
         return CGRect(x: x, y: y, width: w, height: h)
+    }
+}
+
+enum GreenTemplateDetector {
+    static func detectFrames(in cgImage: CGImage) -> [CGRect] {
+        let width = cgImage.width
+        let height = cgImage.height
+        let bytesPerPixel = 4
+        let bytesPerRow = bytesPerPixel * width
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+
+        guard let ctx = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else { return [] }
+
+        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let data = ctx.data else { return [] }
+        let buffer = data.bindMemory(to: UInt8.self, capacity: width * height * bytesPerPixel)
+
+        var mask = [Bool](repeating: false, count: width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                let idx = (y * width + x) * bytesPerPixel
+                let r = buffer[idx]
+                let g = buffer[idx + 1]
+                let b = buffer[idx + 2]
+                if r < 20 && g > 235 && b < 20 {
+                    mask[y * width + x] = true
+                }
+            }
+        }
+
+        var visited = [Bool](repeating: false, count: width * height)
+        var frames: [CGRect] = []
+        var queueX: [Int] = []
+        var queueY: [Int] = []
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let index = y * width + x
+                if !mask[index] || visited[index] { continue }
+                var minX = x
+                var maxX = x
+                var minY = y
+                var maxY = y
+                var count = 0
+
+                queueX.removeAll(keepingCapacity: true)
+                queueY.removeAll(keepingCapacity: true)
+                queueX.append(x)
+                queueY.append(y)
+                visited[index] = true
+
+                while !queueX.isEmpty {
+                    let cx = queueX.removeLast()
+                    let cy = queueY.removeLast()
+                    count += 1
+                    minX = min(minX, cx)
+                    maxX = max(maxX, cx)
+                    minY = min(minY, cy)
+                    maxY = max(maxY, cy)
+
+                    let neighbors = [
+                        (cx + 1, cy),
+                        (cx - 1, cy),
+                        (cx, cy + 1),
+                        (cx, cy - 1)
+                    ]
+                    for (nx, ny) in neighbors {
+                        guard nx >= 0, nx < width, ny >= 0, ny < height else { continue }
+                        let nIndex = ny * width + nx
+                        if mask[nIndex] && !visited[nIndex] {
+                            visited[nIndex] = true
+                            queueX.append(nx)
+                            queueY.append(ny)
+                        }
+                    }
+                }
+
+                if count > 1000 {
+                    let rectWidth = maxX - minX + 1
+                    let rectHeight = maxY - minY + 1
+                    let flippedY = height - maxY - 1
+                    let rect = CGRect(
+                        x: CGFloat(minX),
+                        y: CGFloat(flippedY),
+                        width: CGFloat(rectWidth),
+                        height: CGFloat(rectHeight)
+                    )
+                    frames.append(rect)
+                }
+            }
+        }
+
+        return frames
     }
 }
 
@@ -697,6 +954,27 @@ extension NSImage {
         self.draw(in: CGRect(origin: .zero, size: newSize), from: .zero, operation: .sourceOver, fraction: 1.0)
         img.unlockFocus()
         return img
+    }
+
+    func croppedToAspectRatio(_ ratio: CGFloat) -> NSImage {
+        guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return self }
+        let width = CGFloat(cgImage.width)
+        let height = CGFloat(cgImage.height)
+        let currentRatio = width / height
+        var cropRect = CGRect(x: 0, y: 0, width: width, height: height)
+
+        if currentRatio > ratio {
+            let newWidth = height * ratio
+            let x = (width - newWidth) / 2
+            cropRect = CGRect(x: x, y: 0, width: newWidth, height: height)
+        } else if currentRatio < ratio {
+            let newHeight = width / ratio
+            let y = (height - newHeight) / 2
+            cropRect = CGRect(x: 0, y: y, width: width, height: newHeight)
+        }
+
+        guard let cropped = cgImage.cropping(to: cropRect) else { return self }
+        return NSImage(cgImage: cropped, size: cropRect.size)
     }
 }
 
