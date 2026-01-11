@@ -508,6 +508,18 @@ struct FilmSlotEditor: View {
             .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Zoom")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Reset") {
+                        transform = SlotTransform()
+                    }
+                    .font(.caption)
+                    .buttonStyle(.borderless)
+                    .disabled(image == nil)
+                }
                 Text("Zoom")
                     .font(.caption)
                     .foregroundStyle(.secondary)
