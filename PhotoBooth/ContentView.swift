@@ -12,6 +12,7 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import UniformTypeIdentifiers
 import PDFKit
+import ImageIO
 
 // MARK: - ContentView
 
@@ -25,12 +26,15 @@ struct ContentView: View {
     @State private var selectedCameraID: String? = nil
     @State private var torchEnabled: Bool = false
     @State private var torchLevel: Float = 0.6
-    @State private var captured: [NSImage?] = Array(repeating: nil, count: 4)
+    @State private var captured: [NSImage?] = Array(repeating: nil, count: 3)
     @State private var activeSlot: Int = 0
 
     // Collage settings
-    @State private var spacing: CGFloat = 30
-    @State private var inset: CGFloat = 150
+    @State private var spacing: CGFloat = 70
+    @State private var photoScale: CGFloat = 1.0
+    @State private var insetTop: CGFloat = 140
+    @State private var insetLeft: CGFloat = 90
+    @State private var insetRight: CGFloat = 90
     @State private var cornerRadius: CGFloat = 8
     @State private var drawBorder: Bool = true
     @State private var borderWidth: CGFloat = 1
@@ -94,7 +98,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Photo Booth Builder")
                 .font(.title2).bold()
-            Text("1) Snap 4 photos → 2) Build collage → 3) Export A4 PDF")
+            Text("1) Snap 3 photos → 2) Build collage → 3) Export A4 PDF")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -141,9 +145,20 @@ struct ContentView: View {
             GroupBox("Collage Settings") {
                 VStack(alignment: .leading) {
                     HStack { Text("Spacing"); Spacer(); Text("\(Int(spacing))") }
-                    Slider(value: $spacing, in: 0...120)
-                    HStack { Text("Outer Margin"); Spacer(); Text("\(Int(inset))") }
-                    Slider(value: $inset, in: 0...320)
+                    Slider(value: $spacing, in: 0...600)
+
+                    HStack { Text("Photo Size"); Spacer(); Text("\(Int(photoScale * 100))%") }
+                    Slider(value: $photoScale, in: 0.5...1.0)
+
+                    HStack { Text("Top Margin"); Spacer(); Text("\(Int(insetTop))") }
+                    Slider(value: $insetTop, in: 0...600)
+
+                    HStack { Text("Left Margin"); Spacer(); Text("\(Int(insetLeft))") }
+                    Slider(value: $insetLeft, in: 0...600)
+
+                    HStack { Text("Right Margin"); Spacer(); Text("\(Int(insetRight))") }
+                    Slider(value: $insetRight, in: 0...600)
+
                     HStack { Text("Corner Radius"); Spacer(); Text("\(Int(cornerRadius))") }
                     Slider(value: $cornerRadius, in: 0...80)
                     Toggle("Border", isOn: $drawBorder)
@@ -153,7 +168,7 @@ struct ContentView: View {
                     }
                     Toggle("Mirror Photos", isOn: $mirrorPhotos)
                     HStack { Text("Bottom Margin Extra"); Spacer(); Text("\(Int(bottomMarginExtra))") }
-                    Slider(value: $bottomMarginExtra, in: 0...240)
+                    Slider(value: $bottomMarginExtra, in: 0...600)
                     HStack { Text("Strip Length"); Spacer(); Text("\(Int(stripLengthFactor * 100))%") }
                     Slider(value: $stripLengthFactor, in: 0.6...2.5)
                 }
@@ -234,8 +249,8 @@ struct ContentView: View {
                     .frame(minWidth: 420, minHeight: 300)
 
                     VStack(spacing: 10) {
-                        Text("Filmstrip (4)").font(.headline)
-                        ForEach(0..<4, id: \.self) { idx in
+                        Text("Filmstrip (3)").font(.headline)
+                        ForEach(0..<3, id: \.self) { idx in
                             filmSlot(index: idx)
                         }
                         Spacer()
@@ -266,7 +281,7 @@ struct ContentView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
                         } else {
-                            ContentUnavailableView("Need 4 photos", systemImage: "rectangle.on.rectangle.slash", description: Text("Snap all 4 slots to preview the collage. \n (Ignore the resulting previews, they're kinda broken)"))
+                            ContentUnavailableView("Need 3 photos", systemImage: "rectangle.on.rectangle.slash", description: Text("Snap all 3 slots to preview the collage."))
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
                     }
@@ -344,8 +359,11 @@ struct ContentView: View {
             photos: imgs,
             canvasSize: size,
             spacing: spacing,
-            insetTop: inset,
-            insetBottom: inset + bottomMarginExtra,
+            insetTop: insetTop,
+            insetLeft: insetLeft,
+            insetRight: insetRight,
+            insetBottom: insetTop + bottomMarginExtra,
+            photoScale: photoScale,
             cornerRadius: cornerRadius,
             borderWidth: drawBorder ? borderWidth : 0,
             background: backgroundImage,
@@ -541,11 +559,38 @@ final class CameraController: NSObject, ObservableObject, AVCapturePhotoCaptureD
     // AVCapturePhotoCaptureDelegate
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         if let error { print("Capture error: \(error)") }
-        if let data = photo.fileDataRepresentation(), let img = NSImage(data: data) {
-            DispatchQueue.main.async { self.captureHandler?(img) }
-        } else {
+
+        // Use fileDataRepresentation + ImageIO for broad macOS compatibility.
+        guard let data = photo.fileDataRepresentation() else {
             DispatchQueue.main.async { self.captureHandler?(nil) }
+            return
         }
+
+        // Extract CGImage + EXIF orientation from the encoded image data.
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, options),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            DispatchQueue.main.async { self.captureHandler?(NSImage(data: data)) }
+            return
+        }
+
+        let props = (CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as NSDictionary?)
+        let rawOrientation = (props?[kCGImagePropertyOrientation] as? NSNumber)?.uint32Value ?? 1
+        let orientation = CGImagePropertyOrientation(rawValue: rawOrientation) ?? .up
+
+        // Apply orientation via CoreImage, then render back to CGImage.
+        let ci = CIImage(cgImage: cgImage).oriented(orientation)
+        let ciContext = CIContext(options: nil)
+        if let rendered = ciContext.createCGImage(ci, from: ci.extent) {
+            let size = NSSize(width: ci.extent.width, height: ci.extent.height)
+            let img = NSImage(cgImage: rendered, size: size)
+            DispatchQueue.main.async { self.captureHandler?(img) }
+            return
+        }
+
+        // Fallback if CI render fails
+        let fallback = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        DispatchQueue.main.async { self.captureHandler?(fallback) }
     }
 }
 
@@ -576,14 +621,17 @@ enum CollageRenderer {
         canvasSize: CGSize,
         spacing: CGFloat,
         insetTop: CGFloat,
+        insetLeft: CGFloat,
+        insetRight: CGFloat,
         insetBottom: CGFloat,
+        photoScale: CGFloat,
         cornerRadius: CGFloat,
         borderWidth: CGFloat,
         background: NSImage?,
         mirror: Bool
     ) -> NSImage {
-        // Ensure exactly 4 images by trimming or repeating last
-        let imgs = Array(photos.prefix(4)) + Array(repeating: photos.last ?? photos.first!, count: max(0, 4 - photos.count))
+        // Ensure exactly 3 images by trimming or repeating last
+        let imgs = Array(photos.prefix(3)) + Array(repeating: photos.last ?? photos.first!, count: max(0, 3 - photos.count))
         let drawImgs: [NSImage] = mirror ? imgs.map { $0.mirroredHorizontally() } : imgs
 
         let scale = NSScreen.main?.backingScaleFactor ?? 2.0
@@ -601,30 +649,53 @@ enum CollageRenderer {
                 ctx.fill(rect)
             }
 
-            // Asymmetric outer margins: top and bottom can differ
-            var inner = rect.insetBy(dx: insetTop, dy: 0)
-            inner.origin.y = rect.minY + insetBottom
-            inner.size.height = rect.height - insetTop - insetBottom
+            // Template footprint based on fixed vertical zones
+            // Top, middle, bottom photo zones with consistent spacing
+            let availableHeight = rect.height - insetTop - insetBottom
+            let slotSpacing: CGFloat = spacing
 
-            let totalSpacing = spacing * 3
-            let photoHeight = (inner.height - totalSpacing) / 4
-            let photoWidth = inner.width
+            // Let photos use the full available height; the bottom artwork space is controlled
+            // by the insets/strip length sliders rather than a hard-coded reserved area.
+            let photoAreaHeight = max(0, availableHeight)
 
-            for i in 0..<4 {
-                let y = inner.minY + CGFloat(i) * (photoHeight + spacing)
-                let frame = CGRect(x: inner.minX, y: y, width: photoWidth, height: photoHeight)
+            // Enforce fixed 4:3 aspect ratio for each photo frame, centered horizontally
+            let maxPhotoWidth = rect.width - insetLeft - insetRight
+            // Fit to the available photo area height; clamp to 4:3 and to the available width
+            let rawPhotoHeight = max(0, (photoAreaHeight - slotSpacing * 2) / 3)
+            let targetAspect: CGFloat = 4.0 / 3.0
 
-                // Path with corner radius
-                let path = CGPath(roundedRect: frame, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+            // Base width that fits the available height + width constraints
+            let baseWidth = min(maxPhotoWidth, rawPhotoHeight * targetAspect)
+
+            // Apply user scaling (0.5 ... 1.0) relative to the maximum frame size that fits.
+            // This guarantees the slider always changes the result while keeping the layout valid.
+            let photoWidth = baseWidth * max(0.1, photoScale)
+            let singlePhotoHeight = photoWidth / targetAspect
+
+            let x = rect.minX + insetLeft + (maxPhotoWidth - photoWidth) / 2
+            var y = rect.maxY - insetTop - singlePhotoHeight
+
+            for i in 0..<3 {
+                let frame = CGRect(
+                    x: x,
+                    y: y,
+                    width: photoWidth,
+                    height: singlePhotoHeight
+                )
+
+                let path = CGPath(
+                    roundedRect: frame,
+                    cornerWidth: cornerRadius,
+                    cornerHeight: cornerRadius,
+                    transform: nil
+                )
                 ctx.addPath(path)
                 ctx.clip()
 
-                // Draw image scaled to fill
                 let img = drawImgs[i]
-                let fitted = aspectFillRect(for: img.size, in: frame)
+                let fitted = aspectFillRect(for: img.pixelSize, in: frame)
                 img.draw(in: fitted)
 
-                // Restore clip for next pass
                 ctx.resetClip()
 
                 if borderWidth > 0 {
@@ -633,6 +704,8 @@ enum CollageRenderer {
                     ctx.setLineWidth(borderWidth)
                     ctx.strokePath()
                 }
+
+                y -= (singlePhotoHeight + slotSpacing)
             }
 
             return true
@@ -670,6 +743,15 @@ enum PDFRenderer {
 // MARK: - NSImage helpers
 
 extension NSImage {
+    var pixelSize: CGSize {
+        // Prefer bitmap rep pixel dimensions if available.
+        if let rep = representations.first as? NSBitmapImageRep {
+            return CGSize(width: rep.pixelsWide, height: rep.pixelsHigh)
+        }
+        // Otherwise fall back to the logical size.
+        return size
+    }
+
     func rotated90(clockwise: Bool) -> NSImage {
         let newSize = CGSize(width: size.height, height: size.width)
         let img = NSImage(size: newSize)
@@ -705,3 +787,4 @@ extension NSImage {
 #Preview {
     ContentView()
 }
+
