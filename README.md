@@ -4,5 +4,5 @@
 ![icon](https://github.com/topman365pro/Mac-Photo-Booth-Composer/blob/main/image.png?raw=true)
 ![Screenshoot](https://github.com/topman365pro/Mac-Photo-Booth-Composer/blob/main/ss.png?raw=true)
 ![Result](https://github.com/topman365pro/Mac-Photo-Booth-Composer/blob/main/1.png?raw=true)
-Uses an image (preferable PNG) for the background. 
+Uses an image (preferably PNG) for the background. 
 The recomended background size is 1566x4974, could be smaller, could be bigger.
